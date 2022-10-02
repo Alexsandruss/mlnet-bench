@@ -2,13 +2,33 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net5.0</TargetFramework>
-    <RootNamespace>mlnet_bench</RootNamespace>
+    <TargetFramework>net6.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.ML" Version="1.5.5" />
-    <PackageReference Include="Microsoft.ML.Mkl.Components" Version="1.5.5" />
-    <PackageReference Include="Microsoft.ML.Recommender" Version="0.17.5" />
+    <Reference Include="Microsoft.ML">
+      <HintPath>../machinelearning/artifacts/bin/Microsoft.ML/Debug/netstandard2.0/Microsoft.ML.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.ML.Core">
+      <HintPath>../machinelearning/artifacts/bin/Microsoft.ML/Debug/netstandard2.0/Microsoft.ML.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.ML.Data">
+      <HintPath>../machinelearning/artifacts/bin/Microsoft.ML/Debug/netstandard2.0/Microsoft.ML.Data.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.ML.Mkl.Components">
+      <HintPath>../machinelearning/artifacts/bin/Microsoft.ML.Mkl.Components/Debug/netstandard2.0/Microsoft.ML.Mkl.Components.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.ML.DataView">
+      <HintPath>../machinelearning/artifacts/bin/Microsoft.ML/Debug/netstandard2.0/Microsoft.ML.DataView.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.ML.Transforms">
+      <HintPath>../machinelearning/artifacts/bin/Microsoft.ML.Transforms/Debug/netstandard2.0/Microsoft.ML.Transforms.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.ML.StandardTrainers">
+      <HintPath>../machinelearning/artifacts/bin/Microsoft.ML/Debug/netstandard2.0/Microsoft.ML.StandardTrainers.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.ML.FastTree">
+      <HintPath>../machinelearning/artifacts/bin/Microsoft.ML.FastTree/Debug/netstandard2.0/Microsoft.ML.FastTree.dll</HintPath>
+    </Reference>
+    <PackageReference Include="Newtonsoft.Json" Version="10.0.1"/>
   </ItemGroup>
-
 </Project>
