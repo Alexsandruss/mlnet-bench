@@ -1,3 +1,6 @@
 # dotnet build
 bin
 obj
+
+# csv data and reports
+*.csv
