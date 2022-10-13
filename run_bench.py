@@ -24,7 +24,7 @@ def read_output_from_command(command, env):
     return res.stdout[:-1], res.stderr[:-1]
 
 
-def run_case(n_samples, n_features, n_trees, n_leaves, task_type):
+def run_case(n_samples, n_features, n_trees, n_leaves, n_runs, task_type):
     data_params = {
         'n_samples': 2 * n_samples,
         'n_features': n_features,
@@ -45,25 +45,9 @@ def run_case(n_samples, n_features, n_trees, n_leaves, task_type):
 
     print(f'n_samples={n_samples}, n_features={n_features}, n_trees={n_trees}, n_leaves={n_leaves}')
 
-    env_copy = os.environ.copy()
-    default_stdout, default_stderr = read_output_from_command(f'dotnet run {train_filename} {test_filename} {task_type} {n_trees} {n_leaves}', env_copy)
-
-    print('DEFAULT STDOUT:', default_stdout, 'DEFAULT STDERR:', default_stderr, sep='\n')
-
-    default_res = io.StringIO(default_stdout + '\n')
-
-    default_res = pd.DataFrame(
-        {'algorithm': [f'Random Forest {task_type.capitalize()}'],
+    case_dict = {'algorithm': [f'Random Forest {task_type.capitalize()}'],
         'n samples': [n_samples], 'n features': [n_features],
-        'n trees': [n_trees], 'n leaves': [n_leaves]}).merge(pd.read_csv(default_res))
-
-    env_copy['MLNET_BACKEND'] = 'ONEDAL'
-    optimized_stdout, optimized_stderr = read_output_from_command(f'dotnet run {train_filename} {test_filename} {task_type} {n_trees} {n_leaves}', env_copy)
-
-    print('OPTIMIZED STDOUT:', optimized_stdout, 'OPTIMIZED STDERR:', optimized_stderr, sep='\n')
-
-    optimized_res = io.StringIO(optimized_stdout + '\n')
-    optimized_res = pd.read_csv(optimized_res)
+        'n trees': [n_trees], 'n leaves': [n_leaves]}
 
     if task_type == 'binary':
         metrics = ['accuracy', 'F1 score']
@@ -72,41 +56,62 @@ def run_case(n_samples, n_features, n_trees, n_leaves, task_type):
     metrics = ['all workflow time[ms]', f'training {metrics[0]}', f'testing {metrics[0]}', f'training {metrics[1]}', f'testing {metrics[1]}']
     metrics_map_template = {el: '{} ' + f'{el}' for el in metrics}
 
-    default_res = default_res.rename(columns={k: v.format('ML.NET') for k, v in metrics_map_template.items()})
-    optimized_res = optimized_res.rename(columns={k: v.format('oneDAL') for k, v in metrics_map_template.items()})
+    result = None
+    for i in range(n_runs):
+        env_copy = os.environ.copy()
+        default_stdout, default_stderr = read_output_from_command(f'dotnet run {train_filename} {test_filename} {task_type} {n_trees} {n_leaves}', env_copy)
 
-    result = default_res.merge(optimized_res)
+        print('DEFAULT STDOUT:', default_stdout, 'DEFAULT STDERR:', default_stderr, sep='\n')
+
+        default_res = io.StringIO(default_stdout + '\n')
+        default_res = pd.DataFrame(case_dict).merge(pd.read_csv(default_res))
+
+        env_copy['MLNET_BACKEND'] = 'ONEDAL'
+        optimized_stdout, optimized_stderr = read_output_from_command(f'dotnet run {train_filename} {test_filename} {task_type} {n_trees} {n_leaves}', env_copy)
+
+        print('OPTIMIZED STDOUT:', optimized_stdout, 'OPTIMIZED STDERR:', optimized_stderr, sep='\n')
+
+        optimized_res = io.StringIO(optimized_stdout + '\n')
+        optimized_res = pd.read_csv(optimized_res)
+
+        default_res = default_res.rename(columns={k: v.format('ML.NET') for k, v in metrics_map_template.items()})
+        optimized_res = optimized_res.rename(columns={k: v.format('oneDAL') for k, v in metrics_map_template.items()})
+
+        if result is None:
+            result = default_res.merge(optimized_res)
+        else:
+            result = pd.concat([result, default_res.merge(optimized_res)], axis=0)
+
+    all_columns = list(result.columns)
+    groupby_columns = list(case_dict.keys())
+    metric_columns = list(result.columns)
+    for column in groupby_columns:
+        metric_columns.remove(column)
+    result = result.groupby(groupby_columns)[metric_columns].mean().reset_index()
 
     return result
 
 
+# n_samples_range = [10000, 20000, 50000]
+# n_features_range = [8, 32, 64]
+# n_trees_range = [50, 100, 200]
+# n_leaves_range = [64, 128, 256]
 n_samples_range = [10000, 20000, 50000]
-n_features_range = [8, 32, 64]
-n_trees_range = [50, 100, 200]
-n_leaves_range = [64, 128, 256]
-# n_samples_range = [10000]
-# n_features_range = [8, 16]
-# n_trees_range = [50]
-# n_leaves_range = [64]
+n_features_range = [8, 16, 64]
+n_trees_range = [100]
+n_leaves_range = [128]
 n_runs = 5
 
 result = None
-for n_samples in n_samples_range:
-    for n_features in n_features_range:
-        for n_trees in n_trees_range:
-            for n_leaves in n_leaves_range:
-                for i in range(n_runs):
-                    new_result = run_case(n_samples, n_features, n_trees, n_leaves, task_type='binary')
+for task_type in ['binary', 'regression']:
+    for n_samples in n_samples_range:
+        for n_features in n_features_range:
+            for n_trees in n_trees_range:
+                for n_leaves in n_leaves_range:
+                    new_result = run_case(n_samples, n_features, n_trees, n_leaves, n_runs, task_type=task_type)
                     if result is None:
                         result = new_result
                     else:
                         result = pd.concat([result, new_result], axis=0)
 
-all_columns = list(result.columns)
-groupby_columns = ['algorithm', 'n samples', 'n features', 'n trees', 'n leaves']
-metric_columns = list(result.columns)
-for column in groupby_columns:
-    metric_columns.remove(column)
-
-result = result.groupby(groupby_columns)[metric_columns].mean().reset_index()
 result.to_csv('result.csv', index=False)
