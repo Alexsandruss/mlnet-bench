@@ -32,9 +32,9 @@ def run_case(n_samples, n_features, n_trees, n_leaves, n_runs, task_type):
         'random_state': RANDOM_STATE
     }
     if task_type == 'binary':
-        x, y = make_classification(**data_params)
+        x, y = make_classification(**data_params, class_sep=0.7)
     elif task_type == 'regression':
-        x, y = make_regression(**data_params)
+        x, y = make_regression(**data_params, noise=0.33)
 
     data = np.concatenate([x, y.reshape(-1, 1)], axis=1)
     train_data, test_data = train_test_split(data, test_size=0.5, random_state=RANDOM_STATE)
@@ -59,7 +59,7 @@ def run_case(n_samples, n_features, n_trees, n_leaves, n_runs, task_type):
     result = None
     for i in range(n_runs):
         env_copy = os.environ.copy()
-        default_stdout, default_stderr = read_output_from_command(f'dotnet run {train_filename} {test_filename} {task_type} {n_trees} {n_leaves}', env_copy)
+        default_stdout, default_stderr = read_output_from_command(f'dotnet run {train_filename} {test_filename} {task_type} RandomForest {n_trees} {n_leaves}', env_copy)
 
         print('DEFAULT STDOUT:', default_stdout, 'DEFAULT STDERR:', default_stderr, sep='\n')
 
@@ -67,7 +67,7 @@ def run_case(n_samples, n_features, n_trees, n_leaves, n_runs, task_type):
         default_res = pd.DataFrame(case_dict).merge(pd.read_csv(default_res))
 
         env_copy['MLNET_BACKEND'] = 'ONEDAL'
-        optimized_stdout, optimized_stderr = read_output_from_command(f'dotnet run {train_filename} {test_filename} {task_type} {n_trees} {n_leaves}', env_copy)
+        optimized_stdout, optimized_stderr = read_output_from_command(f'dotnet run {train_filename} {test_filename} {task_type} RandomForest {n_trees} {n_leaves}', env_copy)
 
         print('OPTIMIZED STDOUT:', optimized_stdout, 'OPTIMIZED STDERR:', optimized_stderr, sep='\n')
 
@@ -91,15 +91,10 @@ def run_case(n_samples, n_features, n_trees, n_leaves, n_runs, task_type):
 
     return result
 
-
-# n_samples_range = [10000, 20000, 50000]
-# n_features_range = [8, 32, 64]
-# n_trees_range = [50, 100, 200]
-# n_leaves_range = [64, 128, 256]
 n_samples_range = [10000, 20000, 50000]
-n_features_range = [8, 16, 64]
-n_trees_range = [100]
-n_leaves_range = [128]
+n_features_range = [8, 64, 256]
+n_trees_range = [100, 200, 500]
+n_leaves_range = [128, 256, 512]
 n_runs = 5
 
 result = None

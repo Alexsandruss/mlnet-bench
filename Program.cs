@@ -125,14 +125,43 @@ namespace mlnet_bench
             return metrics;
         }
 
+        public static double[] RunOLSRegression(MLContext mlContext, IDataView trainingData, IDataView testingData, string labelName)
+        {
+            var featuresArray = GetFeaturesArray(trainingData, labelName);
+            var preprocessingPipeline = mlContext.Transforms.Concatenate("Features", featuresArray);
+            var preprocessedTrainingData = preprocessingPipeline.Fit(trainingData).Transform(trainingData);
+            var preprocessedTestingData = preprocessingPipeline.Fit(trainingData).Transform(testingData);
+
+            OlsTrainer.Options options = new OlsTrainer.Options();
+            options.LabelColumnName = labelName;
+            options.FeatureColumnName = "Features";
+
+            var trainer = mlContext.Regression.Trainers.Ols(options);
+
+            ITransformer model = trainer.Fit(preprocessedTrainingData);
+
+            IDataView trainingPredictions = model.Transform(preprocessedTrainingData);
+            var trainingMetrics = mlContext.Regression.Evaluate(trainingPredictions, labelColumnName: labelName);
+            IDataView testingPredictions = model.Transform(preprocessedTestingData);
+            var testingMetrics = mlContext.Regression.Evaluate(testingPredictions, labelColumnName: labelName);
+
+            double[] metrics = new double[4];
+            metrics[0] = trainingMetrics.RootMeanSquaredError;
+            metrics[1] = testingMetrics.RootMeanSquaredError;
+            metrics[2] = trainingMetrics.RSquared;
+            metrics[3] = testingMetrics.RSquared;
+            return metrics;
+        }
+
         static void Main(string[] args)
         {
             // args[0] - training data filename
             // args[1] - testing data filename
-            // args[2] - machine learning task (regression/binary)
+            // args[2] - machine learning task (regression, binary)
+            // args[3] - machine learning algorithm (RandomForest, OLS)
             // Random Forest parameters:
-            //     args[3] - NumberOfTrees
-            //     args[4] - NumberOfLeaves
+            //     args[4] - NumberOfTrees
+            //     args[5] - NumberOfLeaves
             var mlContext = new MLContext(seed: 42);
             // data[0] - training subset
             // data[1] - testing subset
@@ -141,21 +170,32 @@ namespace mlnet_bench
 
             var mainWatch = System.Diagnostics.Stopwatch.StartNew();
             double[] metrics;
-            int numberOfTrees = Int32.Parse(args[3]);
-            int numberOfLeaves = Int32.Parse(args[4]);
-            if (args[2] == "binary")
+            if (args[3] == "RandomForest")
             {
-                metrics = RunRandomForestClassification(mlContext, data[0], data[1], labelName, numberOfTrees, numberOfLeaves);
-                mainWatch.Stop();
-                Console.WriteLine("algorithm,all workflow time[ms],training accuracy,testing accuracy,training F1 score,testing F1 score");
-                Console.WriteLine($"Random Forest Binary,{mainWatch.Elapsed.TotalMilliseconds},{metrics[0]},{metrics[1]},{metrics[2]},{metrics[3]}");
+                int numberOfTrees = Int32.Parse(args[4]);
+                int numberOfLeaves = Int32.Parse(args[5]);
+                if (args[2] == "binary")
+                {
+
+                    metrics = RunRandomForestClassification(mlContext, data[0], data[1], labelName, numberOfTrees, numberOfLeaves);
+                    mainWatch.Stop();
+                    Console.WriteLine("algorithm,all workflow time[ms],training accuracy,testing accuracy,training F1 score,testing F1 score");
+                    Console.WriteLine($"Random Forest Binary,{mainWatch.Elapsed.TotalMilliseconds},{metrics[0]},{metrics[1]},{metrics[2]},{metrics[3]}");
+                }
+                else
+                {
+                    metrics = RunRandomForestRegression(mlContext, data[0], data[1], labelName, numberOfTrees, numberOfLeaves);
+                    mainWatch.Stop();
+                    Console.WriteLine("algorithm,all workflow time[ms],training RMSE,testing RMSE,training R2 score,testing R2 score");
+                    Console.WriteLine($"Random Forest Regression,{mainWatch.Elapsed.TotalMilliseconds},{metrics[0]},{metrics[1]},{metrics[2]},{metrics[3]}");
+                }
             }
-            else
+            else if (args[3] == "OLS")
             {
-                metrics = RunRandomForestRegression(mlContext, data[0], data[1], labelName, numberOfTrees, numberOfLeaves);
+                metrics = RunOLSRegression(mlContext, data[0], data[1], labelName);
                 mainWatch.Stop();
                 Console.WriteLine("algorithm,all workflow time[ms],training RMSE,testing RMSE,training R2 score,testing R2 score");
-                Console.WriteLine($"Random Forest Regression,{mainWatch.Elapsed.TotalMilliseconds},{metrics[0]},{metrics[1]},{metrics[2]},{metrics[3]}");
+                Console.WriteLine($"OLS Regression,{mainWatch.Elapsed.TotalMilliseconds},{metrics[0]},{metrics[1]},{metrics[2]},{metrics[3]}");
             }
         }
     }
