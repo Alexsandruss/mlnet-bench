@@ -29,6 +29,9 @@
     <Reference Include="Microsoft.ML.FastTree">
       <HintPath>../machinelearning/artifacts/bin/Microsoft.ML.FastTree/Debug/netstandard2.0/Microsoft.ML.FastTree.dll</HintPath>
     </Reference>
-    <PackageReference Include="Newtonsoft.Json" Version="10.0.1"/>
+    <Reference Include="Microsoft.ML.OneDal">
+      <HintPath>../machinelearning/artifacts/bin/Microsoft.ML.OneDal/Debug/netstandard2.0/Microsoft.ML.OneDal.dll</HintPath>
+    </Reference>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.1"/>
   </ItemGroup>
 </Project>
