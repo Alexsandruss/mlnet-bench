@@ -13,3 +13,4 @@ else
     exit 1
 fi
 export CPATH=$CONDA_PREFIX/include:$CPATH
+export PATH=$PWD/../machinelearning/.dotnet:$PATH
