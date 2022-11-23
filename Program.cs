@@ -4,15 +4,19 @@ using System.Collections.Generic;
 using Microsoft.ML;
 using Microsoft.ML.Data;
 using Microsoft.ML.Trainers;
+using Microsoft.ML.Trainers.FastTree;
+using Newtonsoft.Json;
 
 namespace mlnet_bench
 {
     class Program
     {
-        public static IDataView[] LoadData(MLContext mlContext, string dataset, string task, string label = "target", char separator = ',')
+        public static IDataView[] LoadData(
+            MLContext mlContext, string trainingFile, string testingFile,
+            string task, string label = "target", char separator = ',')
         {
             List<IDataView> dataList = new List<IDataView>();
-            System.IO.StreamReader file = new System.IO.StreamReader($"data/{dataset}_train.csv");
+            System.IO.StreamReader file = new System.IO.StreamReader(trainingFile);
             string header = file.ReadLine();
             file.Close();
             string[] headerArray = header.Split(separator);
@@ -28,10 +32,7 @@ namespace mlnet_bench
                 }
                 else
                 {
-                    if (task == "recommendation")
-                        columns.Add(new TextLoader.Column(column, DataKind.UInt32, Array.IndexOf(headerArray, column)));
-                    else
-                        columns.Add(new TextLoader.Column(column, DataKind.Single, Array.IndexOf(headerArray, column)));
+                    columns.Add(new TextLoader.Column(column, DataKind.Single, Array.IndexOf(headerArray, column)));
                 }
             }
 
@@ -40,8 +41,8 @@ namespace mlnet_bench
                 hasHeader: true,
                 columns: columns.ToArray()
             );
-            dataList.Add(loader.Load($"data/{dataset}_train.csv"));
-            dataList.Add(loader.Load($"data/{dataset}_test.csv"));
+            dataList.Add(loader.Load(trainingFile));
+            dataList.Add(loader.Load(testingFile));
             return dataList.ToArray();
         }
 
@@ -60,256 +61,141 @@ namespace mlnet_bench
             return featuresList.ToArray();
         }
 
-        public static List<double> EvaluateRegression(MLContext mlContext, IDataView predictions, string labelName)
-        {
-            List<double> metricsList = new List<double>();
-            var metrics = mlContext.Regression.Evaluate(predictions, labelColumnName: labelName);
-            metricsList.Add(metrics.MeanAbsoluteError);
-            metricsList.Add(metrics.RootMeanSquaredError);
-            metricsList.Add(metrics.RSquared);
-            return metricsList;
-        }
-
-        public static List<double> EvaluateClassfication(MLContext mlContext, IDataView predictions, string labelName, bool isMulticlass = false)
-        {
-            List<double> metricsList = new List<double>();
-            if (isMulticlass)
-            {
-                var metrics = mlContext.MulticlassClassification.Evaluate(predictions, labelColumnName: labelName);
-                metricsList.Add(metrics.LogLoss);
-                metricsList.Add(metrics.MacroAccuracy);
-            }
-            else
-            {
-                var metrics = mlContext.BinaryClassification.Evaluate(predictions, labelColumnName: labelName);
-                metricsList.Add(metrics.LogLoss);
-                metricsList.Add(metrics.Accuracy);
-            }
-            return metricsList;
-        }
-
-        public static List<double> EvaluateClustering(MLContext mlContext, IDataView predictions, string labelName)
-        {
-            List<double> metricsList = new List<double>();
-            var metrics = mlContext.Clustering.Evaluate(predictions, featureColumnName: "Features");
-            metricsList.Add(metrics.AverageDistance);
-            metricsList.Add(metrics.DaviesBouldinIndex);
-            return metricsList;
-        }
-
-        public static double[] GetMetrics(MLContext mlContext, Func<IDataView, ITransformer> fitMethod, IDataView trainingData, IDataView testingData, string task, string labelName = "target")
-        {
-            var watch1 = System.Diagnostics.Stopwatch.StartNew();
-            ITransformer model = fitMethod(trainingData);
-            watch1.Stop();
-            var elapsedMs1 = watch1.Elapsed.TotalMilliseconds;
-
-            var watch2 = System.Diagnostics.Stopwatch.StartNew();
-            IDataView testingPredictions = model.Transform(testingData);
-            watch2.Stop();
-            var elapsedMs2 = watch2.Elapsed.TotalMilliseconds;
-            IDataView trainingPredictions = model.Transform(trainingData);
-
-            if (task == "regression" || task == "recommendation")
-            {
-                var trainingMetrics = EvaluateRegression(mlContext, trainingPredictions, labelName);
-                var testingMetrics = EvaluateRegression(mlContext, testingPredictions, labelName);
-
-                double[] metrics = new double[] {
-                    trainingMetrics[0], trainingMetrics[1], trainingMetrics[2], testingMetrics[0], testingMetrics[1], testingMetrics[2], elapsedMs1, elapsedMs2
-                };
-
-                return metrics;
-            }
-            else if (task == "binary" || task == "multi")
-            {
-                var trainingMetrics = EvaluateClassfication(mlContext, trainingPredictions, labelName, task == "multi");
-                var testingMetrics = EvaluateClassfication(mlContext, testingPredictions, labelName, task == "multi");
-
-                double[] metrics = new double[] {
-                    trainingMetrics[0], trainingMetrics[1], testingMetrics[0], testingMetrics[1], elapsedMs1, elapsedMs2
-                };
-                return metrics;
-            }
-            else if (task == "clustering")
-            {
-                var trainingMetrics = EvaluateClustering(mlContext, trainingPredictions, labelName);
-                var testingMetrics = EvaluateClustering(mlContext, testingPredictions, labelName);
-
-                double[] metrics = new double[] {
-                    trainingMetrics[0], trainingMetrics[1], testingMetrics[0], testingMetrics[1], elapsedMs1, elapsedMs2
-                };
-
-                return metrics;
-            }
-            return new double[]{};
-        }
-
-        public static double[] RunOLSRegression(MLContext mlContext, IDataView trainingData, IDataView testingData, string labelName = "target")
+        public static double[] RunRandomForestClassification(MLContext mlContext, IDataView trainingData, IDataView testingData, string labelName, int numberOfTrees, int numberOfLeaves)
         {
             var featuresArray = GetFeaturesArray(trainingData, labelName);
             var preprocessingPipeline = mlContext.Transforms.Concatenate("Features", featuresArray);
             var preprocessedTrainingData = preprocessingPipeline.Fit(trainingData).Transform(trainingData);
             var preprocessedTestingData = preprocessingPipeline.Fit(trainingData).Transform(testingData);
 
-            var trainer = mlContext.Regression.Trainers.Ols(labelColumnName: labelName, featureColumnName: "Features");
+            FastForestBinaryTrainer.Options options = new FastForestBinaryTrainer.Options();
+            options.LabelColumnName = labelName;
+            options.FeatureColumnName = "Features";
+            options.NumberOfTrees = numberOfTrees;
+            options.NumberOfLeaves = numberOfLeaves;
+            options.MinimumExampleCountPerLeaf = 5;
+            options.FeatureFraction = 1.0;
 
-            return GetMetrics(mlContext, trainer.Fit, preprocessedTrainingData, preprocessedTestingData, "regression", labelName);
+            var trainer = mlContext.BinaryClassification.Trainers.FastForest(options);
+
+            ITransformer model = trainer.Fit(preprocessedTrainingData);
+
+            IDataView trainingPredictions = model.Transform(preprocessedTrainingData);
+            var trainingMetrics = mlContext.BinaryClassification.EvaluateNonCalibrated(trainingPredictions, labelColumnName: labelName);
+            IDataView testingPredictions = model.Transform(preprocessedTestingData);
+            var testingMetrics = mlContext.BinaryClassification.EvaluateNonCalibrated(testingPredictions, labelColumnName: labelName);
+
+            double[] metrics = new double[4];
+            metrics[0] = trainingMetrics.Accuracy;
+            metrics[1] = testingMetrics.Accuracy;
+            metrics[2] = trainingMetrics.F1Score;
+            metrics[3] = testingMetrics.F1Score;
+            return metrics;
         }
 
-        public static double[] RunBinaryLBFGSLogReg(MLContext mlContext, IDataView trainingData, IDataView testingData, string labelName = "target")
+        public static double[] RunRandomForestRegression(MLContext mlContext, IDataView trainingData, IDataView testingData, string labelName, int numberOfTrees, int numberOfLeaves)
         {
             var featuresArray = GetFeaturesArray(trainingData, labelName);
             var preprocessingPipeline = mlContext.Transforms.Concatenate("Features", featuresArray);
             var preprocessedTrainingData = preprocessingPipeline.Fit(trainingData).Transform(trainingData);
             var preprocessedTestingData = preprocessingPipeline.Fit(trainingData).Transform(testingData);
 
-            var trainer = mlContext.BinaryClassification.Trainers.LbfgsLogisticRegression(
-                labelColumnName: labelName,
-                featureColumnName: "Features",
-                l1Regularization: 1,
-                l2Regularization: 1
-            );
+            FastForestRegressionTrainer.Options options = new FastForestRegressionTrainer.Options();
+            options.LabelColumnName = labelName;
+            options.FeatureColumnName = "Features";
+            options.NumberOfTrees = numberOfTrees;
+            options.NumberOfLeaves = numberOfLeaves;
+            options.MinimumExampleCountPerLeaf = 5;
+            options.FeatureFraction = 1.0;
 
-            return GetMetrics(mlContext, trainer.Fit, preprocessedTrainingData, preprocessedTestingData, "binary", labelName);
+            var trainer = mlContext.Regression.Trainers.FastForest(options);
+
+            ITransformer model = trainer.Fit(preprocessedTrainingData);
+
+            IDataView trainingPredictions = model.Transform(preprocessedTrainingData);
+            var trainingMetrics = mlContext.Regression.Evaluate(trainingPredictions, labelColumnName: labelName);
+            IDataView testingPredictions = model.Transform(preprocessedTestingData);
+            var testingMetrics = mlContext.Regression.Evaluate(testingPredictions, labelColumnName: labelName);
+
+            double[] metrics = new double[4];
+            metrics[0] = trainingMetrics.RootMeanSquaredError;
+            metrics[1] = testingMetrics.RootMeanSquaredError;
+            metrics[2] = trainingMetrics.RSquared;
+            metrics[3] = testingMetrics.RSquared;
+            return metrics;
         }
 
-        public static double[] RunMultiLBFGSLogReg(MLContext mlContext, IDataView trainingData, IDataView testingData, string labelName = "target")
-        {
-            var featuresArray = GetFeaturesArray(trainingData, labelName);
-            var preprocessingPipeline = mlContext.Transforms.Concatenate("Features", featuresArray).Append(mlContext.Transforms.Conversion.MapValueToKey(labelName));
-            var preprocessedTrainingData = preprocessingPipeline.Fit(trainingData).Transform(trainingData);
-            var preprocessedTestingData = preprocessingPipeline.Fit(trainingData).Transform(testingData);
-
-            var trainer = mlContext.MulticlassClassification.Trainers.LbfgsMaximumEntropy(
-                labelColumnName: labelName,
-                featureColumnName: "Features",
-                l1Regularization: 1,
-                l2Regularization: 1
-            );
-
-            return GetMetrics(mlContext, trainer.Fit, preprocessedTrainingData, preprocessedTestingData, "multi", labelName);
-        }
-
-        public static double[] RunNaiveBayes(MLContext mlContext, IDataView trainingData, IDataView testingData, string labelName = "target")
-        {
-            var featuresArray = GetFeaturesArray(trainingData, labelName);
-            var preprocessingPipeline = mlContext.Transforms.Concatenate("Features", featuresArray).Append(mlContext.Transforms.Conversion.MapValueToKey(labelName));
-            var preprocessedTrainingData = preprocessingPipeline.Fit(trainingData).Transform(trainingData);
-            var preprocessedTestingData = preprocessingPipeline.Fit(trainingData).Transform(testingData);
-
-            var trainer = mlContext.MulticlassClassification.Trainers.NaiveBayes(labelColumnName: labelName, featureColumnName: "Features");
-            return GetMetrics(mlContext, trainer.Fit, preprocessedTrainingData, preprocessedTestingData, "multi", labelName);
-        }
-
-        public static double[] RunKMeans(MLContext mlContext, IDataView trainingData, IDataView testingData, string labelName = "target", int nClusters = 5)
+        public static double[] RunOLSRegression(MLContext mlContext, IDataView trainingData, IDataView testingData, string labelName)
         {
             var featuresArray = GetFeaturesArray(trainingData, labelName);
             var preprocessingPipeline = mlContext.Transforms.Concatenate("Features", featuresArray);
             var preprocessedTrainingData = preprocessingPipeline.Fit(trainingData).Transform(trainingData);
             var preprocessedTestingData = preprocessingPipeline.Fit(trainingData).Transform(testingData);
 
-            var trainer = mlContext.Clustering.Trainers.KMeans(featureColumnName: "Features", numberOfClusters: nClusters);
+            OlsTrainer.Options options = new OlsTrainer.Options();
+            options.LabelColumnName = labelName;
+            options.FeatureColumnName = "Features";
 
-            return GetMetrics(mlContext, trainer.Fit, preprocessedTrainingData, preprocessedTestingData, "clustering", labelName);
-        }
+            var trainer = mlContext.Regression.Trainers.Ols(options);
 
-        public static double[] RunMatrixFactorization(MLContext mlContext, IDataView trainingData, IDataView testingData, string labelName = "target", int rank = 10, int nIterations = 10)
-        {
-            var featuresArray = GetFeaturesArray(trainingData, labelName);
-            var preprocessingPipeline = mlContext.Transforms.Concatenate("Features", featuresArray).Append(mlContext.Transforms.Conversion.MapValueToKey("f0")).Append(mlContext.Transforms.Conversion.MapValueToKey("f1"));
-            var preprocessedTrainingData = preprocessingPipeline.Fit(trainingData).Transform(trainingData);
-            var preprocessedTestingData = preprocessingPipeline.Fit(trainingData).Transform(testingData);
-            var trainer = mlContext.Recommendation().Trainers.MatrixFactorization(labelColumnName: labelName, matrixColumnIndexColumnName: "f0", matrixRowIndexColumnName: "f1", numberOfIterations: nIterations, approximationRank: rank);
+            ITransformer model = trainer.Fit(preprocessedTrainingData);
 
-            return GetMetrics(mlContext, trainer.Fit, preprocessedTrainingData, preprocessedTestingData, "recommendation", labelName);
-        }
+            IDataView trainingPredictions = model.Transform(preprocessedTrainingData);
+            var trainingMetrics = mlContext.Regression.Evaluate(trainingPredictions, labelColumnName: labelName);
+            IDataView testingPredictions = model.Transform(preprocessedTestingData);
+            var testingMetrics = mlContext.Regression.Evaluate(testingPredictions, labelColumnName: labelName);
 
-        public static void PrintMetrics(string dataset, string task, string algorithm, IDataView trainingData, IDataView testingData, double[] metrics, bool printHeader = true)
-        {
-            if (printHeader)
-            {
-                if (task == "regression")
-                {
-                    Console.WriteLine("Algorithm,Dataset,Training Rows,Testing Rows,Columns,Training MeanAbsoluteError,Training RootMeanSquaredError,Training RSquared," +
-                        "Testing MeanAbsoluteError,Testing RootMeanSquaredError,Testing RSquared,Training Time[ms],Prediction Time[ms]");
-                }
-                else if (task == "binary" || task == "multi")
-                {
-                    Console.WriteLine("Algorithm,Dataset,Training Rows,Testing Rows,Columns,Training LogLoss,Training Accuracy,Testing LogLoss,Testing Accuracy,Training Time[ms],Prediction Time[ms]");
-                }
-                else if (task == "clustering")
-                {
-                    Console.WriteLine("Algorithm,Dataset,Training Rows,Testing Rows,Columns,Training AverageDistance,Training DaviesBouldinIndex,Testing AverageDistance,Testing DaviesBouldinIndex,Training Time[ms],Prediction Time[ms]");
-                }
-                else if (task == "recommendation")
-                {
-                    Console.WriteLine("Algorithm,Dataset,Training Rows,Testing Rows,Columns,Training MeanAbsoluteError,Training RootMeanSquaredError,Training RSquared," +
-                        "Testing MeanAbsoluteError,Testing RootMeanSquaredError,Testing RSquared,Training Time[ms],Prediction Time[ms]");
-                }
-            }
-            string output;
-            if (task == "recommendation")
-            {
-                output = $"{algorithm},{dataset},{trainingData.GetColumn<uint>("f0").Count()},{testingData.GetColumn<uint>("f0").Count()},{testingData.Schema.Count - 1}";
-            }
-            else
-            {
-                output = $"{algorithm},{dataset},{trainingData.GetColumn<float>("f0").Count()},{testingData.GetColumn<float>("f0").Count()},{testingData.Schema.Count - 1}";
-            }
-            for (int i = 0; i < metrics.Length; i++)
-            {
-                output += $",{metrics[i]}";
-            }
-            Console.WriteLine(output);
+            double[] metrics = new double[4];
+            metrics[0] = trainingMetrics.RootMeanSquaredError;
+            metrics[1] = testingMetrics.RootMeanSquaredError;
+            metrics[2] = trainingMetrics.RSquared;
+            metrics[3] = testingMetrics.RSquared;
+            return metrics;
         }
 
         static void Main(string[] args)
         {
-            // args[0] - dataset prefix
-            // args[1] - task (regression/binary/multi/clustering/recommendation/decomposition)
-            // args[2] - algorithm
-            // args[3] - number of clusters(KMeans) / components(PCA) / iterations(LinearSVM) / rank(MatrixFactorization)
-            // args[4] - number of iterations(MatrixFactorization)
+            // args[0] - training data filename
+            // args[1] - testing data filename
+            // args[2] - machine learning task (regression, binary)
+            // args[3] - machine learning algorithm (RandomForest, OLS)
+            // Random Forest parameters:
+            //     args[4] - NumberOfTrees
+            //     args[5] - NumberOfLeaves
             var mlContext = new MLContext(seed: 42);
             // data[0] - training subset
             // data[1] - testing subset
-            IDataView[] data = LoadData(mlContext, args[0], args[1]);
+            IDataView[] data = LoadData(mlContext, args[0], args[1], args[2]);
+            string labelName = "target";
 
-            bool printHeader = !(Array.Exists(args, element => element == "noheader"));
-            if (args[2] == "LinearRegression")
+            var mainWatch = System.Diagnostics.Stopwatch.StartNew();
+            double[] metrics;
+            if (args[3] == "RandomForest")
             {
-                double[] metrics = RunOLSRegression(mlContext, data[0], data[1]);
-                PrintMetrics(args[0], args[1], args[2], data[0], data[1], metrics, printHeader);
-            }
-            else if (args[2] == "LBFGSLogisticRegression")
-            {
-                double[] metrics = null;
-                if (args[1] == "binary")
+                int numberOfTrees = Int32.Parse(args[4]);
+                int numberOfLeaves = Int32.Parse(args[5]);
+                if (args[2] == "binary")
                 {
-                    metrics = RunBinaryLBFGSLogReg(mlContext, data[0], data[1]);
-                    PrintMetrics(args[0], args[1], args[2], data[0], data[1], metrics, printHeader);
+
+                    metrics = RunRandomForestClassification(mlContext, data[0], data[1], labelName, numberOfTrees, numberOfLeaves);
+                    mainWatch.Stop();
+                    Console.WriteLine("algorithm,all workflow time[ms],training accuracy,testing accuracy,training F1 score,testing F1 score");
+                    Console.WriteLine($"Random Forest Binary,{mainWatch.Elapsed.TotalMilliseconds},{metrics[0]},{metrics[1]},{metrics[2]},{metrics[3]}");
                 }
                 else
                 {
-                    metrics = RunMultiLBFGSLogReg(mlContext, data[0], data[1]);
-                    PrintMetrics(args[0], args[1], args[2], data[0], data[1], metrics, printHeader);
+                    metrics = RunRandomForestRegression(mlContext, data[0], data[1], labelName, numberOfTrees, numberOfLeaves);
+                    mainWatch.Stop();
+                    Console.WriteLine("algorithm,all workflow time[ms],training RMSE,testing RMSE,training R2 score,testing R2 score");
+                    Console.WriteLine($"Random Forest Regression,{mainWatch.Elapsed.TotalMilliseconds},{metrics[0]},{metrics[1]},{metrics[2]},{metrics[3]}");
                 }
             }
-            else if (args[2] == "NaiveBayes")
+            else if (args[3] == "OLS")
             {
-                double[] metrics = RunNaiveBayes(mlContext, data[0], data[1]);
-                PrintMetrics(args[0], args[1], args[2], data[0], data[1], metrics, printHeader);
-            }
-            else if (args[2] == "KMeans")
-            {
-                double[] metrics = RunKMeans(mlContext, data[0], data[1], nClusters: Int32.Parse(args[3]));
-                PrintMetrics(args[0], args[1], args[2], data[0], data[1], metrics, printHeader);
-            }
-            else if (args[2] == "MatrixFactorization")
-            {
-                double[] metrics = RunMatrixFactorization(mlContext, data[0], data[1]);
-                PrintMetrics(args[0], args[1], args[2], data[0], data[1], metrics, printHeader);
+                metrics = RunOLSRegression(mlContext, data[0], data[1], labelName);
+                mainWatch.Stop();
+                Console.WriteLine("algorithm,all workflow time[ms],training RMSE,testing RMSE,training R2 score,testing R2 score");
+                Console.WriteLine($"OLS Regression,{mainWatch.Elapsed.TotalMilliseconds},{metrics[0]},{metrics[1]},{metrics[2]},{metrics[3]}");
             }
         }
     }
