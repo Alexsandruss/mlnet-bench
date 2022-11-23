@@ -110,3 +110,4 @@ for task_type in ['binary', 'regression']:
                         result = pd.concat([result, new_result], axis=0)
 
 result.to_csv('result.csv', index=False)
+result.to_csv(sys.stdout, index=False)
