@@ -9,13 +9,8 @@ import io
 
 
 RANDOM_STATE = 42
+DEFAULT_DATA_FOLDER = 'data'
 np.random.seed(RANDOM_STATE)
-
-
-def convert_to_csv(data, filename, label='target'):
-    data = pd.DataFrame(data, columns=[f'f{i}' for i in range(data.shape[1] - 1)] + ['target'])
-    data[label] = data[label].astype(int)
-    data.to_csv(filename, index=False)
 
 
 def read_output_from_command(command, env):
@@ -24,90 +19,160 @@ def read_output_from_command(command, env):
     return res.stdout[:-1], res.stderr[:-1]
 
 
-def run_case(n_samples, n_features, n_trees, n_leaves, n_runs, task_type):
+def convert_to_csv(data, filename, label='target'):
+    data = pd.DataFrame(data, columns=[f'f{i}' for i in range(data.shape[1] - 1)] + ['target'])
+    data[label] = data[label].astype(int)
+    data.to_csv(filename, index=False)
+
+
+def generate_synthetic_data(n_training_samples, n_testing_samples, n_features, n_classes=0, data_folder=DEFAULT_DATA_FOLDER):
+    n_samples = n_training_samples + n_testing_samples
     data_params = {
-        'n_samples': 2 * n_samples,
+        'n_samples': n_samples,
         'n_features': n_features,
         'n_informative': n_features // 2,
         'random_state': RANDOM_STATE
     }
-    if task_type == 'binary':
-        x, y = make_classification(**data_params, class_sep=0.7)
-    elif task_type == 'regression':
-        x, y = make_regression(**data_params, noise=0.33)
+    if n_classes == 0:
+        x, y = make_regression(**data_params, noise=1.0, bias=1.0)
+    else:
+        x, y = make_classification(**data_params, n_classes=n_classes)
 
     data = np.concatenate([x, y.reshape(-1, 1)], axis=1)
-    train_data, test_data = train_test_split(data, test_size=0.5, random_state=RANDOM_STATE)
-
-    train_filename, test_filename = "synth_data_train.csv", "synth_data_test.csv"
+    train_data, test_data = train_test_split(data, test_size=n_testing_samples / n_samples, random_state=RANDOM_STATE)
+    train_filename, test_filename = (
+        f"{data_folder}/synth_data_train_{n_training_samples}_of_{n_samples}_{n_features}_{n_classes if n_classes else 'reg'}.csv",
+        f"{data_folder}/synth_data_test_{n_testing_samples}_of_{n_samples}_{n_features}_{n_classes if n_classes else 'reg'}.csv")
     convert_to_csv(train_data, train_filename)
     convert_to_csv(test_data, test_filename)
 
-    print(f'n_samples={n_samples}, n_features={n_features}, n_trees={n_trees}, n_leaves={n_leaves}')
+    return train_filename, test_filename
 
-    case_dict = {'algorithm': [f'Random Forest {task_type.capitalize()}'],
-        'n samples': [n_samples], 'n features': [n_features],
-        'n trees': [n_trees], 'n leaves': [n_leaves]}
 
-    if task_type == 'binary':
-        metrics = ['accuracy', 'F1 score']
-    elif task_type == 'regression':
-        metrics = ['RMSE', 'R2 score']
-    metrics = ['all workflow time[ms]', f'training {metrics[0]}', f'testing {metrics[0]}', f'training {metrics[1]}', f'testing {metrics[1]}']
-    metrics_map_template = {el: '{} ' + f'{el}' for el in metrics}
+def read_dotnet_output(output):
+    return pd.read_csv(io.StringIO(output))
 
-    result = None
+
+def run_bench(env, training_filename, testing_filename, label_name, task, algorithm, *args):
+    command = f'dotnet run {training_filename} {testing_filename} {label_name} {task} {algorithm}'
+    for arg in args:
+        command += f' {arg}'
+    print(command)
+    return read_output_from_command(command, env)
+
+
+def run_case(training_filename, testing_filename, label_name, task, algorithm, *args, n_runs=5):
+    higher_is_better_metrics = ['accuracy', 'F1 score', 'R2 score']
+    if task == 'binary':
+        quality_metrics = ['accuracy', 'F1 score']
+    elif task == 'regression':
+        quality_metrics = ['RMSE', 'R2 score']
+    else:
+        raise ValueError(f'unknown "{task}" task')
+    quality_metrics = [f'training {m}' for m in quality_metrics] + [f'testing {m}' for m in quality_metrics]
+    metrics = ['workload time[ms]'] + quality_metrics
+
+    # default ML.NET run
+    env_copy = os.environ.copy()
+    default_result = None
     for i in range(n_runs):
-        env_copy = os.environ.copy()
-        default_stdout, default_stderr = read_output_from_command(f'dotnet run {train_filename} {test_filename} {task_type} RandomForest {n_trees} {n_leaves}', env_copy)
-
-        print('DEFAULT STDOUT:', default_stdout, 'DEFAULT STDERR:', default_stderr, sep='\n')
-
-        default_res = io.StringIO(default_stdout + '\n')
-        default_res = pd.DataFrame(case_dict).merge(pd.read_csv(default_res))
-
-        env_copy['MLNET_BACKEND'] = 'ONEDAL'
-        optimized_stdout, optimized_stderr = read_output_from_command(f'dotnet run {train_filename} {test_filename} {task_type} RandomForest {n_trees} {n_leaves}', env_copy)
-
-        print('OPTIMIZED STDOUT:', optimized_stdout, 'OPTIMIZED STDERR:', optimized_stderr, sep='\n')
-
-        optimized_res = io.StringIO(optimized_stdout + '\n')
-        optimized_res = pd.read_csv(optimized_res)
-
-        default_res = default_res.rename(columns={k: v.format('ML.NET') for k, v in metrics_map_template.items()})
-        optimized_res = optimized_res.rename(columns={k: v.format('oneDAL') for k, v in metrics_map_template.items()})
-
-        if result is None:
-            result = default_res.merge(optimized_res)
+        stdout, stderr = run_bench(env_copy, training_filename, testing_filename, label_name, task, algorithm, *args)
+        print('DEFAULT STDOUT:', stdout, 'DEFAULT STDERR:', stderr, sep='\n')
+        new_result = read_dotnet_output(stdout + '\n')
+        if default_result is None:
+            default_result = new_result
         else:
-            result = pd.concat([result, default_res.merge(optimized_res)], axis=0)
+            default_result = pd.concat([default_result, new_result], axis=0)
+    groupby_columns = list(set(default_result.columns) - set(metrics))
+    default_result = default_result.groupby(groupby_columns)[metrics].mean().reset_index()
 
-    all_columns = list(result.columns)
-    groupby_columns = list(case_dict.keys())
-    metric_columns = list(result.columns)
-    for column in groupby_columns:
-        metric_columns.remove(column)
-    result = result.groupby(groupby_columns)[metric_columns].mean().reset_index()
+    # oneDAL-accelerated run
+    env_copy['MLNET_BACKEND'] = 'ONEDAL'
+    optim_result = None
+    for i in range(n_runs):
+        stdout, stderr = run_bench(env_copy, training_filename, testing_filename, label_name, task, algorithm, *args)
+        print('OPTIMIZED STDOUT:', stdout, 'OPTIMIZED STDERR:', stderr, sep='\n')
+        new_result = read_dotnet_output(stdout + '\n')
+        if optim_result is None:
+            optim_result = new_result
+        else:
+            optim_result = pd.concat([optim_result, new_result], axis=0)
+    optim_result = optim_result.groupby(groupby_columns)[metrics].mean().reset_index()
 
+    # comparison of results
+    metrics_map_template = {el: '{} ' + f'{el}' for el in metrics}
+    default_result = default_result.rename(columns={k: v.format('ML.NET') for k, v in metrics_map_template.items()})
+    optim_result = optim_result.rename(columns={k: v.format('oneDAL') for k, v in metrics_map_template.items()})
+
+    result = default_result.merge(optim_result)
+    for metric in metrics:
+        if metric.split(' ', 1)[-1] in higher_is_better_metrics:
+            result[f'oneDAL/ML.NET {metric}'] = \
+                result[f'oneDAL {metric}'] / result[f'ML.NET {metric}']
+        else:
+            result[f'ML.NET/oneDAL {metric}'.replace('[ms]', '')] = \
+                result[f'ML.NET {metric}'] / result[f'oneDAL {metric}']
     return result
 
-n_samples_range = [10000, 20000, 50000]
-n_features_range = [8, 64, 256]
-n_trees_range = [100, 200, 500]
-n_leaves_range = [128, 256, 512]
-n_runs = 5
 
-result = None
-for task_type in ['binary', 'regression']:
+if __name__ == '__main__':
+    # n_samples_range = [20000, 50000]
+    # n_features_range = [16, 128]
+    # n_trees_range = [100, 500]
+    # n_leaves_range = [64, 256]
+
+    # result = None
+    # for n_samples in n_samples_range:
+    #     for n_features in n_features_range:
+    #         training_filename, testing_filename = generate_synthetic_data(n_samples, n_samples, n_features, n_classes=2)
+    #         label_name = 'target'
+    #         for n_trees in n_trees_range:
+    #             for n_leaves in n_leaves_range:
+    #                 new_result = run_case(training_filename, testing_filename, label_name, 'binary', 'RF', n_trees, n_leaves)
+    #                 for k, v in {'n_leaves': n_leaves, 'n_trees': n_trees, 'n_features': n_features, 'n_samples': n_samples}.items():
+    #                     new_result.insert(1, k, [v])
+    #                 if result is None:
+    #                     result = new_result
+    #                 else:
+    #                     result = pd.concat([result, new_result], axis=0)
+
+    # result.to_csv('rfc_result.csv', index=False)
+    # result.to_csv(sys.stdout, index=False)
+
+    n_samples_range = [20000, 50000, 100000, 200000, 500000]
+    n_features_range = [8, 16, 32, 64, 128, 256]
+    n_iterations = 1000
+
+    result = None
     for n_samples in n_samples_range:
         for n_features in n_features_range:
-            for n_trees in n_trees_range:
-                for n_leaves in n_leaves_range:
-                    new_result = run_case(n_samples, n_features, n_trees, n_leaves, n_runs, task_type=task_type)
-                    if result is None:
-                        result = new_result
-                    else:
-                        result = pd.concat([result, new_result], axis=0)
+            training_filename, testing_filename = generate_synthetic_data(n_samples, n_samples, n_features, n_classes=2)
+            label_name = 'target'
+            new_result = run_case(training_filename, testing_filename, label_name, 'binary', 'LR', n_iterations)
+            for k, v in {'n_features': n_features, 'n_samples': n_samples}.items():
+                new_result.insert(1, k, [v])
+            if result is None:
+                result = new_result
+            else:
+                result = pd.concat([result, new_result], axis=0)
+            os.system(f'rm {training_filename} {testing_filename}')
 
-result.to_csv('result.csv', index=False)
-result.to_csv(sys.stdout, index=False)
+    result.to_csv('logreg_result.csv', index=False)
+    result.to_csv(sys.stdout, index=False)
+
+    result = None
+    for n_samples in n_samples_range:
+        for n_features in n_features_range:
+            training_filename, testing_filename = generate_synthetic_data(n_samples, n_samples, n_features, n_classes=0)
+            label_name = 'target'
+            new_result = run_case(training_filename, testing_filename, label_name, 'regression', 'OLS')
+            for k, v in {'n_features': n_features, 'n_samples': n_samples}.items():
+                new_result.insert(1, k, [v])
+            if result is None:
+                result = new_result
+            else:
+                result = pd.concat([result, new_result], axis=0)
+            os.system(f'rm {training_filename} {testing_filename}')
+
+    result.to_csv('olsreg_result.csv', index=False)
+    result.to_csv(sys.stdout, index=False)
