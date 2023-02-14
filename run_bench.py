@@ -34,7 +34,7 @@ def generate_synthetic_data(n_training_samples, n_testing_samples, n_features, n
         'random_state': RANDOM_STATE
     }
     if n_classes == 0:
-        x, y = make_regression(**data_params)
+        x, y = make_regression(**data_params, noise=1.0, bias=1.0)
     else:
         x, y = make_classification(**data_params, n_classes=n_classes)
 
@@ -140,7 +140,7 @@ if __name__ == '__main__':
     # result.to_csv(sys.stdout, index=False)
 
     n_samples_range = [20000, 50000, 100000, 200000, 500000]
-    n_features_range = [4, 16, 64, 256, 1024]
+    n_features_range = [8, 16, 32, 64, 128, 256]
     n_iterations = 1000
 
     result = None
